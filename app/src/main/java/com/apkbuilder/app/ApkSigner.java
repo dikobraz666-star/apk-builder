@@ -5,7 +5,6 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.security.DigestInputStream;
 import java.security.MessageDigest;
 import java.security.PrivateKey;
 import java.security.Signature;
@@ -15,7 +14,6 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.jar.Attributes;
 import java.util.jar.JarEntry;
-import java.util.jar.JarFile;
 import java.util.jar.JarOutputStream;
 import java.util.jar.Manifest;
 import java.util.zip.ZipEntry;
@@ -23,8 +21,6 @@ import java.util.zip.ZipInputStream;
 
 /**
  * Signs an APK file using JAR v1 signature scheme.
- * Android accepts v1 (JAR) signatures for API < 24.
- * For broader compatibility, v1 is sufficient for sideloading.
  */
 public class ApkSigner {
 
@@ -37,7 +33,6 @@ public class ApkSigner {
     }
 
     public void sign(File unsignedApk, File signedApk) throws Exception {
-        // Read all entries from the unsigned APK
         Map<String, byte[]> entries = new LinkedHashMap<>();
 
         try (ZipInputStream zis = new ZipInputStream(new FileInputStream(unsignedApk))) {
@@ -50,10 +45,9 @@ public class ApkSigner {
             }
         }
 
-        // Build MANIFEST.MF
         Manifest manifest = new Manifest();
         manifest.getMainAttributes().put(Attributes.Name.MANIFEST_VERSION, "1.0");
-        manifest.getMainAttributes().put(Attributes.Name.CREATED_BY, "APKBuilder 1.0");
+        manifest.getMainAttributes().putValue("Created-By", "APKBuilder 1.0");
 
         for (Map.Entry<String, byte[]> e : entries.entrySet()) {
             String name = e.getKey();
@@ -67,20 +61,14 @@ public class ApkSigner {
             manifest.getEntries().put(name, attrs);
         }
 
-        // Serialize MANIFEST.MF
         java.io.ByteArrayOutputStream manifestBytes = new java.io.ByteArrayOutputStream();
         manifest.write(manifestBytes);
         byte[] manifestData = manifestBytes.toByteArray();
 
-        // Build CERT.SF
         byte[] sfData = buildSignatureFile(manifestData, entries);
-
-        // Build CERT.RSA (PKCS#7 signature block)
         byte[] rsaData = buildSignatureBlock(sfData);
 
-        // Write signed APK
         try (JarOutputStream jos = new JarOutputStream(new FileOutputStream(signedApk))) {
-            // Write original entries
             for (Map.Entry<String, byte[]> e : entries.entrySet()) {
                 JarEntry je = new JarEntry(e.getKey());
                 jos.putNextEntry(je);
@@ -88,19 +76,16 @@ public class ApkSigner {
                 jos.closeEntry();
             }
 
-            // Write META-INF/MANIFEST.MF
             JarEntry mfEntry = new JarEntry("META-INF/MANIFEST.MF");
             jos.putNextEntry(mfEntry);
             jos.write(manifestData);
             jos.closeEntry();
 
-            // Write META-INF/CERT.SF
             JarEntry sfEntry = new JarEntry("META-INF/CERT.SF");
             jos.putNextEntry(sfEntry);
             jos.write(sfData);
             jos.closeEntry();
 
-            // Write META-INF/CERT.RSA
             JarEntry rsaEntry = new JarEntry("META-INF/CERT.RSA");
             jos.putNextEntry(rsaEntry);
             jos.write(rsaData);
@@ -130,55 +115,29 @@ public class ApkSigner {
     }
 
     private byte[] buildSignatureBlock(byte[] sfData) throws Exception {
-        // Create PKCS#7 signature
         Signature sig = Signature.getInstance("SHA256withRSA");
         sig.initSign(privateKey);
         sig.update(sfData);
         byte[] signature = sig.sign();
-
-        // Build minimal PKCS#7 SignedData structure
-        return buildPkcs7(signature, certificate.getEncoded());
-    }
-
-    private byte[] buildPkcs7(byte[] signature, byte[] certDer) throws Exception {
-        // Use Android's built-in PKCS7 implementation via reflection
-        try {
-            Class<?> pkcs7Class = Class.forName("sun.security.pkcs.PKCS7");
-            // Build via ContentInfo + SignerInfo
-            // This is complex, so we use a simpler approach with BouncyCastle if available
-            Class<?> cmssClass = Class.forName("org.bouncycastle.cms.CMSSignedDataGenerator");
-            // ... use BC if available
-        } catch (ClassNotFoundException e) {
-            // Fall back to manual DER encoding
-        }
-
-        // Manual minimal PKCS#7 DER encoding
-        return buildMinimalPkcs7DER(signature, certDer);
+        return buildMinimalPkcs7DER(signature, certificate.getEncoded());
     }
 
     private byte[] buildMinimalPkcs7DER(byte[] signature, byte[] certDer) {
-        // Build a minimal but valid PKCS#7 structure
-        // OID for signedData: 1.2.840.113549.1.7.2
         byte[] signedDataOid = {0x2A, (byte) 0x86, 0x48, (byte) 0x86, (byte) 0xF7, 0x0D, 0x01, 0x07, 0x02};
 
-        // Wrap signature in OCTET STRING
         byte[] sigOctet = derTlv(0x04, signature);
-        // Wrap cert in SEQUENCE
-        byte[] certSeq = certDer; // cert is already DER
+        byte[] certSeq = certDer;
 
-        // Build SignerInfo (simplified)
-        byte[] version = new byte[]{0x02, 0x01, 0x01}; // INTEGER 1
+        byte[] version = new byte[]{0x02, 0x01, 0x01};
         byte[] signerInfo = derTlv(0x31, concat(version, sigOctet));
 
-        // Build SignedData content
         byte[] signedData = derTlv(0x30, concat(version,
-                derTlv(0x31, new byte[0]), // digestAlgorithms SET
-                derTlv(0x30, new byte[]{0x06, 0x09, 0x2A, (byte) 0x86, 0x48, (byte) 0x86, (byte) 0xF7, 0x0D, 0x01, 0x07, 0x01}), // contentInfo
-                derTlv((byte) 0xA0, certSeq), // [0] certificates
-                derTlv(0x31, signerInfo)  // signerInfos
+                derTlv(0x31, new byte[0]),
+                derTlv(0x30, new byte[]{0x06, 0x09, 0x2A, (byte) 0x86, 0x48, (byte) 0x86, (byte) 0xF7, 0x0D, 0x01, 0x07, 0x01}),
+                derTlv((byte) 0xA0, certSeq),
+                derTlv(0x31, signerInfo)
         ));
 
-        // Wrap in ContentInfo
         byte[] contentInfo = derTlv(0x30, concat(
                 derTlv(0x06, signedDataOid),
                 derTlv((byte) 0xA0, signedData)
