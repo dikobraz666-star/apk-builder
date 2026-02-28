@@ -140,11 +140,12 @@ public class ApkCompiler {
             StringWriter errWriter = new StringWriter();
 
             Object ecjMain = mainClass.getConstructor(
-                    PrintWriter.class, PrintWriter.class, boolean.class
+                    PrintWriter.class, PrintWriter.class, boolean.class, Object.class
             ).newInstance(
                     new PrintWriter(outWriter),
                     new PrintWriter(errWriter),
-                    false
+                    false,
+                    null
             );
 
             String[] args = {
@@ -404,4 +405,4 @@ public class ApkCompiler {
                 .matcher(javaContent);
         return m.find() ? m.group(1) : "MainActivity";
     }
-}
+            }
