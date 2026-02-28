@@ -271,6 +271,22 @@ public class ApkCompiler {
     private void log(int p, String m) { callback.onProgress(p, m); }
 
     private void extractAsset(String name, File dest) throws IOException {
+        // Try direct APK extraction first (bypasses asset compression issues)
+        try {
+            String apkPath = context.getPackageCodePath();
+            try (java.util.zip.ZipFile zipFile = new java.util.zip.ZipFile(apkPath)) {
+                java.util.zip.ZipEntry entry = zipFile.getEntry("assets/" + name);
+                if (entry != null && entry.getSize() > 0) {
+                    try (InputStream in = zipFile.getInputStream(entry);
+                         FileOutputStream out = new FileOutputStream(dest)) {
+                        byte[] buf = new byte[8192]; int len;
+                        while ((len = in.read(buf)) > 0) out.write(buf, 0, len);
+                    }
+                    return;
+                }
+            }
+        } catch (Exception ignored) {}
+        // Fallback to assets API
         try (InputStream in = context.getAssets().open(name);
              FileOutputStream out = new FileOutputStream(dest)) {
             byte[] buf = new byte[8192]; int len;
