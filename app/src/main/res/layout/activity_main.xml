@@ -1,0 +1,192 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#0D1117"
+    android:padding="16dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingBottom="16dp">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="⚙ APK Builder"
+            android:textColor="#58A6FF"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tv_status_badge"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="READY"
+            android:textColor="#3FB950"
+            android:textSize="11sp"
+            android:background="@drawable/badge_bg"
+            android:paddingHorizontal="8dp"
+            android:paddingVertical="4dp" />
+    </LinearLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="#21262D"
+        android:layout_marginBottom="16dp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="App Package Name"
+        android:textColor="#8B949E"
+        android:textSize="12sp"
+        android:layout_marginBottom="4dp" />
+
+    <EditText
+        android:id="@+id/et_package_name"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="com.example.myapp"
+        android:text="com.example.myapp"
+        android:textColor="#C9D1D9"
+        android:textColorHint="#484F58"
+        android:background="@drawable/input_bg"
+        android:padding="12dp"
+        android:fontFamily="monospace"
+        android:textSize="14sp"
+        android:layout_marginBottom="12dp"
+        android:inputType="text" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="App Name"
+        android:textColor="#8B949E"
+        android:textSize="12sp"
+        android:layout_marginBottom="4dp" />
+
+    <EditText
+        android:id="@+id/et_app_name"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="My App"
+        android:text="My App"
+        android:textColor="#C9D1D9"
+        android:textColorHint="#484F58"
+        android:background="@drawable/input_bg"
+        android:padding="12dp"
+        android:textSize="14sp"
+        android:layout_marginBottom="16dp"
+        android:inputType="text" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginBottom="12dp">
+
+        <Button
+            android:id="@+id/btn_load_java"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="📄 Load .java"
+            android:textColor="#C9D1D9"
+            android:background="@drawable/btn_secondary"
+            android:textSize="13sp"
+            android:layout_marginEnd="8dp" />
+
+        <Button
+            android:id="@+id/btn_load_manifest"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="📋 Load Manifest"
+            android:textColor="#C9D1D9"
+            android:background="@drawable/btn_secondary"
+            android:textSize="13sp" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginBottom="16dp">
+
+        <TextView
+            android:id="@+id/tv_java_status"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="No .java file"
+            android:textColor="#484F58"
+            android:textSize="11sp"
+            android:layout_marginEnd="8dp" />
+
+        <TextView
+            android:id="@+id/tv_manifest_status"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="No manifest"
+            android:textColor="#484F58"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Build Log"
+        android:textColor="#8B949E"
+        android:textSize="12sp"
+        android:layout_marginBottom="4dp" />
+
+    <ScrollView
+        android:id="@+id/scroll_log"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="@drawable/input_bg"
+        android:layout_marginBottom="16dp">
+
+        <TextView
+            android:id="@+id/tv_log"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="APK Builder ready.\nLoad your .java file and AndroidManifest.xml to begin.\n"
+            android:textColor="#3FB950"
+            android:textSize="12sp"
+            android:fontFamily="monospace"
+            android:padding="12dp" />
+    </ScrollView>
+
+    <ProgressBar
+        android:id="@+id/progress_bar"
+        style="@android:style/Widget.ProgressBar.Horizontal"
+        android:layout_width="match_parent"
+        android:layout_height="8dp"
+        android:progressTint="#58A6FF"
+        android:progressBackgroundTint="#21262D"
+        android:progress="0"
+        android:max="100"
+        android:visibility="gone"
+        android:layout_marginBottom="12dp" />
+
+    <Button
+        android:id="@+id/btn_build"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:text="⚡ BUILD APK"
+        android:textColor="#FFFFFF"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        android:background="@drawable/btn_primary"
+        android:letterSpacing="0.1" />
+
+</LinearLayout>
