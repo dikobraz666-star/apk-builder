@@ -2,28 +2,25 @@ package com.apkbuilder.app;
 
 import android.content.Context;
 
-import org.eclipse.jdt.internal.compiler.batch.Main;
-
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
-import java.security.KeyStore;
 import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
+import java.math.BigInteger;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
-import java.math.BigInteger;
-import java.security.cert.Certificate;
-import java.util.Date;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.List;
 
 public class ApkCompiler {
@@ -86,18 +83,22 @@ public class ApkCompiler {
     }
 
     private void prepareEnvironment() throws Exception {
-        // Extract android.jar from assets if needed
         File androidJar = new File(buildDir, "android.jar");
         if (!androidJar.exists()) {
             log(8, "Extracting android.jar...");
             extractAsset("android.jar", androidJar);
         }
 
-        // Extract dx.jar from assets
         File dxJar = new File(buildDir, "dx.jar");
         if (!dxJar.exists()) {
             log(12, "Extracting dx.jar...");
             extractAsset("dx.jar", dxJar);
+        }
+
+        File ecjJar = new File(buildDir, "ecj.jar");
+        if (!ecjJar.exists()) {
+            log(14, "Extracting ecj.jar...");
+            extractAsset("ecj.jar", ecjJar);
         }
 
         log(15, "Environment ready.");
@@ -105,8 +106,8 @@ public class ApkCompiler {
 
     private void compileJava() throws Exception {
         File androidJar = new File(buildDir, "android.jar");
+        File ecjJar = new File(buildDir, "ecj.jar");
 
-        // Prepare source file with correct package
         File srcDir = new File(buildDir, "src");
         String[] packageParts = packageName.split("\\.");
         File packageDir = srcDir;
@@ -115,10 +116,8 @@ public class ApkCompiler {
         }
         packageDir.mkdirs();
 
-        // Copy java source to correct location
         String javaContent = readFile(javaFile);
 
-        // Replace package declaration if needed
         if (!javaContent.startsWith("package " + packageName)) {
             javaContent = "package " + packageName + ";\n\n" +
                     javaContent.replaceFirst("^package [^;]+;\n?", "");
@@ -129,34 +128,48 @@ public class ApkCompiler {
 
         log(25, "Compiling: " + srcFile.getName());
 
-        // Use ECJ compiler
-        StringWriter outWriter = new StringWriter();
-        StringWriter errWriter = new StringWriter();
+        // Use ECJ via reflection (loaded from extracted ecj.jar)
+        java.net.URLClassLoader ecjLoader = new java.net.URLClassLoader(
+                new java.net.URL[]{ecjJar.toURI().toURL()},
+                ClassLoader.getSystemClassLoader()
+        );
 
-        String[] args = {
-                "-source", "1.8",
-                "-target", "1.8",
-                "-classpath", androidJar.getAbsolutePath(),
-                "-d", classesDir.getAbsolutePath(),
-                "-encoding", "UTF-8",
-                srcFile.getAbsolutePath()
-        };
+        try {
+            Class<?> mainClass = ecjLoader.loadClass("org.eclipse.jdt.internal.compiler.batch.Main");
+            StringWriter outWriter = new StringWriter();
+            StringWriter errWriter = new StringWriter();
 
-        boolean success = new Main(
-                new PrintWriter(outWriter),
-                new PrintWriter(errWriter),
-                false, null, null
-        ).compile(args);
+            Object ecjMain = mainClass.getConstructor(
+                    PrintWriter.class, PrintWriter.class, boolean.class
+            ).newInstance(
+                    new PrintWriter(outWriter),
+                    new PrintWriter(errWriter),
+                    false
+            );
 
-        if (!success) {
-            String errors = errWriter.toString();
-            if (errors.isEmpty()) errors = outWriter.toString();
-            throw new Exception("Compilation failed:\n" + errors);
+            String[] args = {
+                    "-source", "1.8",
+                    "-target", "1.8",
+                    "-classpath", androidJar.getAbsolutePath(),
+                    "-d", classesDir.getAbsolutePath(),
+                    "-encoding", "UTF-8",
+                    srcFile.getAbsolutePath()
+            };
+
+            boolean success = (boolean) mainClass.getMethod("compile", String[].class)
+                    .invoke(ecjMain, (Object) args);
+
+            if (!success) {
+                String errors = errWriter.toString();
+                if (errors.isEmpty()) errors = outWriter.toString();
+                throw new Exception("Compilation failed:\n" + errors);
+            }
+        } finally {
+            ecjLoader.close();
         }
 
         log(40, "Compilation successful!");
 
-        // List compiled classes
         List<File> classes = listFiles(classesDir, ".class");
         log(42, "Compiled " + classes.size() + " class file(s)");
     }
@@ -165,15 +178,13 @@ public class ApkCompiler {
         File dexFile = new File(buildDir, "classes.dex");
         File dxJar = new File(buildDir, "dx.jar");
 
-        log(48, "Running D8/DX converter...");
+        log(48, "Running DX converter...");
 
-        // Use D8 dexer via reflection (included in Android SDK tools)
-        // Fallback: use bundled dx tool
         try {
             runDx(dxJar, dexFile);
         } catch (Exception e) {
-            log(50, "DX failed, trying D8...");
-            runD8(dexFile);
+            log(50, "DX failed: " + e.getMessage());
+            throw e;
         }
 
         if (!dexFile.exists()) {
@@ -184,7 +195,6 @@ public class ApkCompiler {
     }
 
     private void runDx(File dxJar, File dexFile) throws Exception {
-        // Use reflection to call dx.jar main class
         java.net.URLClassLoader loader = new java.net.URLClassLoader(
                 new java.net.URL[]{dxJar.toURI().toURL()},
                 null
@@ -200,29 +210,7 @@ public class ApkCompiler {
         };
 
         main.invoke(null, (Object) args);
-    }
-
-    private void runD8(File dexFile) throws Exception {
-        // Try using D8 from the Android build tools
-        List<File> classFiles = listFiles(classesDir, ".class");
-        if (classFiles.isEmpty()) {
-            throw new Exception("No class files found to convert");
-        }
-
-        List<String> argList = new ArrayList<>();
-        argList.add("--output");
-        argList.add(buildDir.getAbsolutePath());
-        argList.add("--min-api");
-        argList.add("21");
-
-        for (File f : classFiles) {
-            argList.add(f.getAbsolutePath());
-        }
-
-        // Try D8 via com.android.tools.r8
-        Class<?> d8Class = Class.forName("com.android.tools.r8.D8");
-        java.lang.reflect.Method runMethod = d8Class.getMethod("run", String[].class);
-        runMethod.invoke(null, (Object) argList.toArray(new String[0]));
+        loader.close();
     }
 
     private File packageApk() throws Exception {
@@ -231,22 +219,17 @@ public class ApkCompiler {
 
         log(68, "Creating APK package...");
 
-        // Determine which manifest to use
         File manifest = (manifestFile != null && manifestFile.exists())
                 ? manifestFile
                 : generateDefaultManifest();
 
         try (ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(unsignedApk))) {
-
-            // Add classes.dex
             addToZip(zos, dexFile, "classes.dex");
             log(72, "Added classes.dex");
 
-            // Add AndroidManifest.xml (binary - use aapt, or add as-is for simple cases)
             addToZip(zos, manifest, "AndroidManifest.xml");
             log(75, "Added AndroidManifest.xml");
 
-            // Add resources.arsc (minimal)
             byte[] minimalArsc = generateMinimalResourcesArsc(appName, packageName);
             ZipEntry arscEntry = new ZipEntry("resources.arsc");
             zos.putNextEntry(arscEntry);
@@ -254,7 +237,6 @@ public class ApkCompiler {
             zos.closeEntry();
             log(78, "Added resources.arsc");
 
-            // Add minimal res/ structure
             addMinimalResources(zos, appName);
             log(82, "Added resources");
         }
@@ -266,20 +248,17 @@ public class ApkCompiler {
     private File signApk(File unsignedApk) throws Exception {
         log(87, "Generating signing key...");
 
-        // Generate a debug keystore
         KeyPairGenerator kpg = KeyPairGenerator.getInstance("RSA");
         kpg.initialize(2048);
         KeyPair keyPair = kpg.generateKeyPair();
         PrivateKey privateKey = keyPair.getPrivate();
 
-        // Generate self-signed certificate
         X509Certificate cert = generateSelfSignedCert(keyPair, packageName);
 
         log(91, "Signing APK...");
 
         File signedApk = new File(outputDir, appName.replaceAll("[^a-zA-Z0-9]", "_") + ".apk");
 
-        // Sign using JAR signing (v1 signature)
         ApkSigner signer = new ApkSigner(privateKey, cert);
         signer.sign(unsignedApk, signedApk);
 
@@ -307,17 +286,14 @@ public class ApkCompiler {
     }
 
     private byte[] generateMinimalResourcesArsc(String appName, String packageName) {
-        // Minimal valid resources.arsc binary
-        // This is a pre-built minimal resource table
         return new byte[]{
-                0x02, 0x00, 0x0C, 0x00, // RES_TABLE_TYPE
+                0x02, 0x00, 0x0C, 0x00,
                 0x00, 0x00, 0x00, 0x00,
                 0x01, 0x00, 0x00, 0x00
         };
     }
 
     private void addMinimalResources(ZipOutputStream zos, String appName) throws IOException {
-        // Add minimal strings res
         String stringsXml = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n" +
                 "<resources>\n" +
                 "    <string name=\"app_name\">" + appName + "</string>\n" +
@@ -329,14 +305,6 @@ public class ApkCompiler {
     }
 
     private X509Certificate generateSelfSignedCert(KeyPair keyPair, String cn) throws Exception {
-        // Use Bouncy Castle or Android's built-in cert generation
-        try {
-            // Try Android KeyStore approach first
-            Class<?> builderClass = Class.forName("android.security.keystore.KeyGenParameterSpec$Builder");
-            // Fall through to reflection-based cert generation
-        } catch (Exception ignored) {}
-
-        // Minimal self-signed cert via reflection for older APIs
         Class<?> x509v3Class = Class.forName("org.bouncycastle.x509.X509V3CertificateGenerator");
         Object certGen = x509v3Class.newInstance();
 
@@ -368,8 +336,6 @@ public class ApkCompiler {
         return nameClass.getConstructor(String.class)
                 .newInstance(((javax.security.auth.x500.X500Principal) principal).getName());
     }
-
-    // ---- Utilities ----
 
     private void log(int percent, String msg) {
         callback.onProgress(percent, msg);
@@ -420,7 +386,9 @@ public class ApkCompiler {
     private List<File> listFiles(File dir, String ext) {
         List<File> result = new ArrayList<>();
         if (!dir.exists()) return result;
-        for (File f : dir.listFiles() != null ? dir.listFiles() : new File[0]) {
+        File[] files = dir.listFiles();
+        if (files == null) return result;
+        for (File f : files) {
             if (f.isDirectory()) {
                 result.addAll(listFiles(f, ext));
             } else if (f.getName().endsWith(ext)) {
@@ -431,10 +399,9 @@ public class ApkCompiler {
     }
 
     private String getMainClassName(String javaContent) {
-        // Extract public class name from Java source
         java.util.regex.Matcher m = java.util.regex.Pattern
                 .compile("public\\s+class\\s+(\\w+)")
                 .matcher(javaContent);
         return m.find() ? m.group(1) : "MainActivity";
     }
-                                                                              }
+}
