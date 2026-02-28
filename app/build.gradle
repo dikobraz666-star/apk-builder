@@ -14,13 +14,13 @@ android {
         versionName "1.0"
     }
 
+    aaptOptions {
+        noCompress "jar"
+    }
+
     buildTypes {
-        release {
-            minifyEnabled false
-        }
-        debug {
-            debuggable true
-        }
+        release { minifyEnabled false }
+        debug { debuggable true }
     }
 
     compileOptions {
