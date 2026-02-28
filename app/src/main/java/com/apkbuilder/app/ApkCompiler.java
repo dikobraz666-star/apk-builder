@@ -139,14 +139,20 @@ public class ApkCompiler {
             StringWriter outWriter = new StringWriter();
             StringWriter errWriter = new StringWriter();
 
-            Object ecjMain = mainClass.getConstructor(
-                    PrintWriter.class, PrintWriter.class, boolean.class, Object.class
-            ).newInstance(
-                    new PrintWriter(outWriter),
-                    new PrintWriter(errWriter),
-                    false,
-                    null
-            );
+            PrintWriter pw1 = new PrintWriter(outWriter);
+            PrintWriter pw2 = new PrintWriter(errWriter);
+            Object ecjMain = null;
+            java.lang.reflect.Constructor<?>[] ctors = mainClass.getConstructors();
+            for (java.lang.reflect.Constructor<?> ctor : ctors) {
+                int n = ctor.getParameterTypes().length;
+                try {
+                    if (n == 3) ecjMain = ctor.newInstance(pw1, pw2, false);
+                    else if (n == 4) ecjMain = ctor.newInstance(pw1, pw2, false, null);
+                    else if (n == 5) ecjMain = ctor.newInstance(pw1, pw2, false, null, null);
+                    if (ecjMain != null) break;
+                } catch (Exception ignored) {}
+            }
+            if (ecjMain == null) throw new Exception("Cannot instantiate ECJ. Constructors: " + ctors.length);
 
             String[] args = {
                     "-source", "1.8",
@@ -405,4 +411,4 @@ public class ApkCompiler {
                 .matcher(javaContent);
         return m.find() ? m.group(1) : "MainActivity";
     }
-            }
+}
