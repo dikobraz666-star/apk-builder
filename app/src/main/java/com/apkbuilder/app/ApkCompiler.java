@@ -74,26 +74,21 @@ public class ApkCompiler {
     }
 
     private void prepareEnvironment() throws Exception {
-        extractAssetIfNeeded("android.jar", 8);
-        extractAssetIfNeeded("dx.jar", 12);
-        extractAssetIfNeeded("ecj.jar", 14);
-        log(15, "Environment ready.");
-    }
-
-    private void extractAssetIfNeeded(String name, int logPercent) throws IOException {
-        File dest = new File(buildDir, name);
-        if (!dest.exists() || dest.length() == 0) {
-            log(logPercent, "Extracting " + name + "...");
-            extractAsset(name, dest);
-        }
+        // Assets stored as .zip to prevent Android from compressing them
+        extractAsset("android.zip", new File(buildDir, "android.jar"), 8);
+        extractAsset("dx.zip", new File(buildDir, "dx.jar"), 12);
+        extractAsset("ecj.zip", new File(buildDir, "ecj.jar"), 14);
+        File ecjJar = new File(buildDir, "ecj.jar");
+        log(15, "Environment ready. ecj.jar=" + (ecjJar.length()/1024) + "KB");
     }
 
     private void compileJava() throws Exception {
         File androidJar = new File(buildDir, "android.jar");
         File ecjJar = new File(buildDir, "ecj.jar");
 
-        // List classes in ECJ jar for debugging
         log(21, "Scanning ecj.jar (" + (ecjJar.length()/1024) + " KB)...");
+
+        // List compiler-related classes in ECJ jar
         List<String> compilerClasses = new ArrayList<>();
         try (ZipInputStream zis = new ZipInputStream(new FileInputStream(ecjJar))) {
             ZipEntry entry;
@@ -106,9 +101,7 @@ public class ApkCompiler {
             }
         }
         log(22, "Found " + compilerClasses.size() + " compiler classes");
-        for (String cls : compilerClasses) {
-            log(22, "  " + cls);
-        }
+        for (String cls : compilerClasses) log(22, "  " + cls);
 
         // Prepare source
         File srcDir = new File(buildDir, "src");
@@ -137,13 +130,11 @@ public class ApkCompiler {
             PrintWriter pw1 = new PrintWriter(out);
             PrintWriter pw2 = new PrintWriter(err);
             boolean success = false;
-
-            // Try every found class
             Exception lastEx = null;
+
             for (String cls : compilerClasses) {
                 try {
                     Class<?> c = ecjLoader.loadClass(cls);
-                    // Try static compile method
                     try {
                         String args = "-source 1.8 -target 1.8 -classpath \""
                                 + androidJar.getAbsolutePath() + "\" -d \""
@@ -152,10 +143,8 @@ public class ApkCompiler {
                         success = (boolean) c.getMethod("compile",
                                 String.class, PrintWriter.class, PrintWriter.class, Object.class)
                                 .invoke(null, args, pw1, pw2, null);
-                        log(35, "Compiled via " + cls + " (static)");
-                        break;
+                        if (success) { log(35, "Compiled via " + cls); break; }
                     } catch (Exception e1) {
-                        // Try instance compile method
                         for (java.lang.reflect.Constructor<?> ctor : c.getConstructors()) {
                             int n = ctor.getParameterTypes().length;
                             try {
@@ -170,16 +159,13 @@ public class ApkCompiler {
                                             srcFile.getAbsolutePath()};
                                     success = (boolean) c.getMethod("compile", String[].class)
                                             .invoke(inst, (Object) argsArr);
-                                    log(35, "Compiled via " + cls + " (instance)");
-                                    break;
+                                    if (success) { log(35, "Compiled via " + cls); break; }
                                 }
                             } catch (Exception ignored) {}
                         }
                         if (success) break;
                     }
-                } catch (Exception e) {
-                    lastEx = e;
-                }
+                } catch (Exception e) { lastEx = e; }
             }
 
             if (!success) {
@@ -191,14 +177,13 @@ public class ApkCompiler {
         } finally {
             ecjLoader.close();
         }
-
         log(40, "Compilation successful!");
     }
 
     private void convertToDex() throws Exception {
         File dexFile = new File(buildDir, "classes.dex");
         File dxJar = new File(buildDir, "dx.jar");
-        log(48, "Running DX converter...");
+        log(48, "Running DX...");
         java.net.URLClassLoader loader = new java.net.URLClassLoader(
                 new java.net.URL[]{dxJar.toURI().toURL()}, null);
         Class<?> dxClass = loader.loadClass("com.android.dx.command.Main");
@@ -206,13 +191,13 @@ public class ApkCompiler {
         dxClass.getMethod("main", String[].class).invoke(null, (Object) args);
         loader.close();
         if (!dexFile.exists()) throw new Exception("DEX conversion failed");
-        log(60, "DEX done: " + (dexFile.length() / 1024) + " KB");
+        log(60, "DEX done: " + (dexFile.length()/1024) + " KB");
     }
 
     private File packageApk() throws Exception {
         File unsignedApk = new File(buildDir, "unsigned.apk");
         File dexFile = new File(buildDir, "classes.dex");
-        log(68, "Packaging APK...");
+        log(68, "Packaging...");
         File manifest = (manifestFile != null && manifestFile.exists())
                 ? manifestFile : generateDefaultManifest();
         try (ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(unsignedApk))) {
@@ -256,7 +241,6 @@ public class ApkCompiler {
     private X509Certificate generateSelfSignedCert(KeyPair kp, String cn) throws Exception {
         Class<?> x509 = Class.forName("org.bouncycastle.x509.X509V3CertificateGenerator");
         Object gen = x509.newInstance();
-        Object prin = Class.forName("javax.security.auth.x500.X500Principal").getConstructor(String.class).newInstance("CN=" + cn);
         Object name = Class.forName("org.bouncycastle.asn1.x509.X509Name").getConstructor(String.class).newInstance("CN=" + cn);
         x509.getMethod("setSerialNumber", BigInteger.class).invoke(gen, BigInteger.valueOf(System.currentTimeMillis()));
         x509.getMethod("setSubjectDN", Class.forName("org.bouncycastle.asn1.x509.X509Name")).invoke(gen, name);
@@ -270,28 +254,14 @@ public class ApkCompiler {
 
     private void log(int p, String m) { callback.onProgress(p, m); }
 
-    private void extractAsset(String name, File dest) throws IOException {
-        // Try direct APK extraction first (bypasses asset compression issues)
-        try {
-            String apkPath = context.getPackageCodePath();
-            try (java.util.zip.ZipFile zipFile = new java.util.zip.ZipFile(apkPath)) {
-                java.util.zip.ZipEntry entry = zipFile.getEntry("assets/" + name);
-                if (entry != null && entry.getSize() > 0) {
-                    try (InputStream in = zipFile.getInputStream(entry);
-                         FileOutputStream out = new FileOutputStream(dest)) {
-                        byte[] buf = new byte[8192]; int len;
-                        while ((len = in.read(buf)) > 0) out.write(buf, 0, len);
-                    }
-                    return;
-                }
-            }
-        } catch (Exception ignored) {}
-        // Fallback to assets API
-        try (InputStream in = context.getAssets().open(name);
+    private void extractAsset(String assetName, File dest, int logPercent) throws IOException {
+        log(logPercent, "Extracting " + assetName + "...");
+        try (InputStream in = context.getAssets().open(assetName);
              FileOutputStream out = new FileOutputStream(dest)) {
             byte[] buf = new byte[8192]; int len;
             while ((len = in.read(buf)) > 0) out.write(buf, 0, len);
         }
+        log(logPercent, "Extracted " + dest.getName() + ": " + (dest.length()/1024) + " KB");
     }
 
     private void addToZip(ZipOutputStream zos, File f, String name) throws IOException {
