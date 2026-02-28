@@ -9,6 +9,13 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
+      - name: Download ECJ and DX jars into assets
+        run: |
+          mkdir -p app/src/main/assets
+          curl -L "https://repo1.maven.org/maven2/org/eclipse/jdt/ecj/4.6.1/ecj-4.6.1.jar" -o app/src/main/assets/ecj.jar
+          curl -L "https://repo1.maven.org/maven2/com/google/android/tools/dx/1.7/dx-1.7.jar" -o app/src/main/assets/dx.jar
+          curl -L "https://github.com/Reginer/aosp-android-jar/raw/main/android-28/android.jar" -o app/src/main/assets/android.jar
+          ls -lh app/src/main/assets/
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
       - name: Build APK
