@@ -82,7 +82,7 @@ public class ApkCompiler {
 
     private void extractAssetIfNeeded(String name, int logPercent) throws IOException {
         File dest = new File(buildDir, name);
-        if (!dest.exists()) {
+        if (!dest.exists() || dest.length() == 0) {
             log(logPercent, "Extracting " + name + "...");
             extractAsset(name, dest);
         }
