@@ -201,7 +201,8 @@ public class ApkCompiler {
                     }
                     if (compileMethod == null) throw new Exception("No compile() method found");
                     try {
-                        compileMethod.invoke(compiler);
+                        // compile(File[]) takes one File[] argument
+                        compileMethod.invoke(compiler, new Object[]{new File[]{srcFile}});
                     } catch (java.lang.reflect.InvocationTargetException ite2) {
                         Throwable c2 = ite2.getCause();
                         throw new Exception("compile() inner error: " + (c2 != null ? c2.toString() : ite2.toString()));
