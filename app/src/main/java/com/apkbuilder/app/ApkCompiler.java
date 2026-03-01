@@ -74,36 +74,17 @@ public class ApkCompiler {
     }
 
     private void prepareEnvironment() throws Exception {
-        // Assets stored as .zip to prevent Android from compressing them
         extractAsset("android.zip", new File(buildDir, "android.jar"), 8);
         extractAsset("dx.zip", new File(buildDir, "dx.jar"), 12);
         extractAsset("ecj.zip", new File(buildDir, "ecj.jar"), 14);
-        File ecjJar = new File(buildDir, "ecj.jar");
-        log(15, "Environment ready. ecj.jar=" + (ecjJar.length()/1024) + "KB");
+        log(15, "Environment ready. ecj=" + (new File(buildDir,"ecj.jar").length()/1024) + "KB");
     }
 
     private void compileJava() throws Exception {
         File androidJar = new File(buildDir, "android.jar");
         File ecjJar = new File(buildDir, "ecj.jar");
 
-        log(21, "Scanning ecj.jar (" + (ecjJar.length()/1024) + " KB)...");
-
-        // List compiler-related classes in ECJ jar
-        List<String> compilerClasses = new ArrayList<>();
-        try (ZipInputStream zis = new ZipInputStream(new FileInputStream(ecjJar))) {
-            ZipEntry entry;
-            while ((entry = zis.getNextEntry()) != null) {
-                String name = entry.getName();
-                if (name.endsWith(".class") && (name.contains("Main") || name.contains("Batch") || name.contains("batch"))) {
-                    compilerClasses.add(name.replace("/", ".").replace(".class", ""));
-                }
-                zis.closeEntry();
-            }
-        }
-        log(22, "Found " + compilerClasses.size() + " compiler classes");
-        for (String cls : compilerClasses) log(22, "  " + cls);
-
-        // Prepare source
+        // Prepare source file
         File srcDir = new File(buildDir, "src");
         String[] parts = packageName.split("\\.");
         File pkgDir = srcDir;
@@ -119,40 +100,62 @@ public class ApkCompiler {
         writeFile(srcFile, javaContent);
         log(25, "Compiling: " + srcFile.getName());
 
-        java.net.URLClassLoader ecjLoader = new java.net.URLClassLoader(
-                new java.net.URL[]{ecjJar.toURI().toURL()},
-                ClassLoader.getSystemClassLoader()
-        );
+        // Run ECJ compiler as a subprocess using the device's Java runtime
+        // ECJ main class: org.eclipse.jdt.internal.compiler.batch.Main
+        String javaExe = System.getProperty("java.home") + "/bin/java";
+        File javaExeFile = new File(javaExe);
 
-        try {
-            StringWriter out = new StringWriter();
-            StringWriter err = new StringWriter();
-            PrintWriter pw1 = new PrintWriter(out);
-            PrintWriter pw2 = new PrintWriter(err);
-
-            // Use Main directly - we know it exists in ecj 4.6.1
-            Class<?> mainClass = ecjLoader.loadClass("org.eclipse.jdt.internal.compiler.batch.Main");
-            Object ecjMain = mainClass.getConstructor(
-                    PrintWriter.class, PrintWriter.class, boolean.class
-            ).newInstance(pw1, pw2, false);
-
-            String[] argsArr = {"-source", "1.8", "-target", "1.8",
+        if (javaExeFile.exists()) {
+            // Use subprocess java -jar ecj.jar
+            log(28, "Using java subprocess...");
+            ProcessBuilder pb = new ProcessBuilder(
+                    javaExe,
+                    "-jar", ecjJar.getAbsolutePath(),
+                    "-source", "1.8", "-target", "1.8",
                     "-classpath", androidJar.getAbsolutePath(),
                     "-d", classesDir.getAbsolutePath(),
-                    srcFile.getAbsolutePath()};
-
-            boolean success = (boolean) mainClass.getMethod("compile", String[].class)
-                    .invoke(ecjMain, (Object) argsArr);
-
-            if (!success) {
-                String errors = err.toString();
-                if (errors.isEmpty()) errors = out.toString();
-                throw new Exception("Compilation failed:\n" + errors);
+                    srcFile.getAbsolutePath()
+            );
+            pb.redirectErrorStream(true);
+            pb.directory(buildDir);
+            Process proc = pb.start();
+            StringBuilder output = new StringBuilder();
+            byte[] buf = new byte[4096]; int len;
+            while ((len = proc.getInputStream().read(buf)) > 0)
+                output.append(new String(buf, 0, len));
+            int exitCode = proc.waitFor();
+            log(35, "ECJ exit code: " + exitCode);
+            if (exitCode != 0) {
+                throw new Exception("Compilation failed:\n" + output.toString());
             }
-        } finally {
-            ecjLoader.close();
+        } else {
+            // Fallback: invoke ECJ main() statically
+            log(28, "Using ECJ static main (java.home=" + System.getProperty("java.home") + ")...");
+            java.net.URLClassLoader ecjLoader = new java.net.URLClassLoader(
+                    new java.net.URL[]{ecjJar.toURI().toURL()},
+                    null  // Use null parent to avoid conflicts
+            );
+            try {
+                Class<?> mainClass = ecjLoader.loadClass("org.eclipse.jdt.internal.compiler.batch.Main");
+                java.lang.reflect.Method mainMethod = mainClass.getMethod("main", String[].class);
+                String[] args = {
+                        "-source", "1.8", "-target", "1.8",
+                        "-classpath", androidJar.getAbsolutePath(),
+                        "-d", classesDir.getAbsolutePath(),
+                        srcFile.getAbsolutePath()
+                };
+                mainMethod.invoke(null, (Object) args);
+            } finally {
+                ecjLoader.close();
+            }
         }
-        log(40, "Compilation successful!");
+
+        // Verify classes were generated
+        List<File> classes = listFiles(classesDir, ".class");
+        if (classes.isEmpty()) {
+            throw new Exception("No .class files generated. Compilation may have failed silently.");
+        }
+        log(40, "Compiled " + classes.size() + " class file(s)");
     }
 
     private void convertToDex() throws Exception {
