@@ -9,21 +9,21 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
       - name: Download and DEX-ify compiler jars
         run: |
           mkdir -p app/src/main/assets
-          
-          # Download Android build tools for dx
-          wget -q https://dl.google.com/android/repository/build-tools_r34-linux.zip -O build-tools.zip
-          unzip -q build-tools.zip -d build-tools-dir
-          DX=$(find build-tools-dir -name "dx" -type f | head -1)
-          chmod +x "$DX"
           
           # Download Janino jars
           curl -L "https://repo1.maven.org/maven2/org/codehaus/janino/janino/3.1.9/janino-3.1.9.jar" -o janino.jar
           curl -L "https://repo1.maven.org/maven2/org/codehaus/janino/commons-compiler/3.1.9/commons-compiler-3.1.9.jar" -o commons-compiler.jar
           
-          # Convert Janino to DEX so Android ART can load it
+          # Find dx tool from Android SDK
+          DX=$(find $ANDROID_SDK_ROOT/build-tools -name "dx" | sort -r | head -1)
+          echo "Using dx: $DX"
+          
+          # Convert Janino to DEX
           "$DX" --dex --output=app/src/main/assets/janino.zip janino.jar commons-compiler.jar
           
           # Download other assets
