@@ -99,14 +99,27 @@ public class ApkCompiler {
         writeFile(srcFile, javaContent);
         log(25, "Compiling: " + srcFile.getName());
 
-        // Load Janino as DEX - this works on Android ART!
-        File dexOptDir = new File(buildDir, "dexopt");
-        dexOptDir.mkdirs();
+        // Load Janino DEX directly from APK using InMemoryDexClassLoader (Android 8+)
+        // This bypasses the "writable location" restriction
+        java.nio.ByteBuffer dexBuffer;
+        try (java.util.zip.ZipFile apkZip = new java.util.zip.ZipFile(context.getPackageCodePath())) {
+            java.util.zip.ZipEntry dexEntry = apkZip.getEntry("assets/janino.zip");
+            if (dexEntry == null) throw new Exception("janino.zip not found in APK");
+            byte[] dexBytes = new byte[(int) dexEntry.getSize()];
+            try (InputStream dexIn = apkZip.getInputStream(dexEntry)) {
+                int read = 0;
+                while (read < dexBytes.length) {
+                    int n = dexIn.read(dexBytes, read, dexBytes.length - read);
+                    if (n < 0) break;
+                    read += n;
+                }
+            }
+            dexBuffer = java.nio.ByteBuffer.wrap(dexBytes);
+        }
+        log(27, "Loaded janino DEX from APK: " + dexBuffer.capacity() + " bytes");
 
-        dalvik.system.DexClassLoader janinoLoader = new dalvik.system.DexClassLoader(
-                janinoDex.getAbsolutePath(),
-                dexOptDir.getAbsolutePath(),
-                null,
+        dalvik.system.InMemoryDexClassLoader janinoLoader = new dalvik.system.InMemoryDexClassLoader(
+                dexBuffer,
                 context.getClassLoader()
         );
 
