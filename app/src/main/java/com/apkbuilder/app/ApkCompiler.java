@@ -187,11 +187,24 @@ public class ApkCompiler {
                         null,                          // warningHandlePatterns
                         false                          // noWarn
                     );
+                    // Find compile method
+                    java.lang.reflect.Method compileMethod = null;
+                    for (java.lang.reflect.Method m : compilerClass.getMethods()) {
+                        if (m.getName().equals("compile")) {
+                            log(29, "compile method: " + m.toString());
+                            if (m.getParameterTypes().length == 0) compileMethod = m;
+                        }
+                    }
+                    if (compileMethod == null) {
+                        // try compile(File[])
+                        try { compileMethod = compilerClass.getMethod("compile", File[].class); } catch(Exception ignored){}
+                    }
+                    if (compileMethod == null) throw new Exception("No compile() method found");
                     try {
-                        compilerClass.getMethod("compile").invoke(compiler);
+                        compileMethod.invoke(compiler);
                     } catch (java.lang.reflect.InvocationTargetException ite2) {
                         Throwable c2 = ite2.getCause();
-                        throw new Exception("compile() error: " + (c2 != null ? c2.toString() : ite2.toString()));
+                        throw new Exception("compile() inner error: " + (c2 != null ? c2.toString() : ite2.toString()));
                     }
                 } catch (java.lang.reflect.InvocationTargetException ite) {
                     Throwable cause = ite.getCause();
