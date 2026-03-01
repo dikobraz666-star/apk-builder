@@ -140,17 +140,37 @@ public class ApkCompiler {
         );
 
         try {
-            Class<?> compilerClass = janinoLoader.loadClass("org.codehaus.janino.JavaC");
-            log(27, "Janino loaded via DexClassLoader!");
+            // Try different Janino compiler class names
+            Class<?> compilerClass = null;
+            String[] classNames = {
+                "org.codehaus.janino.Compiler",
+                "org.codehaus.janino.JavaC",
+                "org.codehaus.commons.compiler.jdk.JavaSourceClassLoader",
+                "org.codehaus.janino.SimpleCompiler"
+            };
+            for (String cn : classNames) {
+                try { compilerClass = janinoLoader.loadClass(cn); log(27, "Found: " + cn); break; }
+                catch (ClassNotFoundException ignored) { log(27, "Not found: " + cn); }
+            }
+            if (compilerClass == null) throw new Exception("No Janino compiler class found in DEX");
 
-            Object compiler = compilerClass.newInstance();
-            compilerClass.getMethod("setClassPath", String.class)
-                    .invoke(compiler, androidJar.getAbsolutePath());
-            compilerClass.getMethod("setDestinationDirectory", String.class, boolean.class)
-                    .invoke(compiler, classesDir.getAbsolutePath(), true);
-            compilerClass.getMethod("compile", File[].class)
-                    .invoke(compiler, new Object[]{new File[]{srcFile}});
-
+            String name = compilerClass.getName();
+            if (name.equals("org.codehaus.janino.Compiler")) {
+                // Compiler(File[] sourceFiles, File destinationDirectory, File[] classPath)
+                Object compiler = compilerClass.getConstructor(
+                    File[].class, File.class, File.class, File.class, String.class
+                ).newInstance(new File[]{srcFile}, classesDir, null, new File(androidJar.getAbsolutePath()), null);
+                compilerClass.getMethod("compile").invoke(compiler);
+            } else if (name.equals("org.codehaus.janino.SimpleCompiler")) {
+                Object compiler = compilerClass.newInstance();
+                compilerClass.getMethod("cook", java.io.Reader.class)
+                    .invoke(compiler, new java.io.FileReader(srcFile));
+            } else {
+                Object compiler = compilerClass.newInstance();
+                try { compilerClass.getMethod("setClassPath", String.class).invoke(compiler, androidJar.getAbsolutePath()); } catch(Exception ignored){}
+                try { compilerClass.getMethod("setDestinationDirectory", String.class, boolean.class).invoke(compiler, classesDir.getAbsolutePath(), true); } catch(Exception ignored){}
+                compilerClass.getMethod("compile", File[].class).invoke(compiler, new Object[]{new File[]{srcFile}});
+            }
             log(35, "Compilation successful!");
         } catch (Exception e) {
             throw new Exception("Janino compile error: " + e.getMessage());
