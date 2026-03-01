@@ -7,11 +7,8 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.PrintWriter;
-import java.io.StringWriter;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
-import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
 import java.math.BigInteger;
 import java.util.zip.ZipEntry;
@@ -75,15 +72,13 @@ public class ApkCompiler {
     private void prepareEnvironment() throws Exception {
         extractAsset("android.zip", new File(buildDir, "android.jar"), 8);
         extractAsset("dx.zip", new File(buildDir, "dx.jar"), 12);
-        extractAsset("janino.zip", new File(buildDir, "janino.jar"), 13);
-        extractAsset("commons-compiler.zip", new File(buildDir, "commons-compiler.jar"), 14);
-        log(15, "Environment ready.");
+        extractAsset("janino.zip", new File(buildDir, "janino.dex"), 14);
+        log(15, "Environment ready. janino=" + (new File(buildDir,"janino.dex").length()/1024) + "KB");
     }
 
     private void compileJava() throws Exception {
         File androidJar = new File(buildDir, "android.jar");
-        File janinoJar = new File(buildDir, "janino.jar");
-        File commonsJar = new File(buildDir, "commons-compiler.jar");
+        File janinoDex = new File(buildDir, "janino.dex");
 
         // Prepare source
         File srcDir = new File(buildDir, "src");
@@ -101,56 +96,32 @@ public class ApkCompiler {
         writeFile(srcFile, javaContent);
         log(25, "Compiling: " + srcFile.getName());
 
-        // Use Janino compiler via reflection - works on Android ART
-        java.net.URLClassLoader janinoLoader = new java.net.URLClassLoader(
-                new java.net.URL[]{
-                        commonsJar.toURI().toURL(),
-                        janinoJar.toURI().toURL()
-                },
-                ClassLoader.getSystemClassLoader()
+        // Load Janino as DEX - this works on Android ART!
+        File dexOptDir = new File(buildDir, "dexopt");
+        dexOptDir.mkdirs();
+
+        dalvik.system.DexClassLoader janinoLoader = new dalvik.system.DexClassLoader(
+                janinoDex.getAbsolutePath(),
+                dexOptDir.getAbsolutePath(),
+                null,
+                context.getClassLoader()
         );
 
         try {
-            // Janino's JavaC compiler
             Class<?> compilerClass = janinoLoader.loadClass("org.codehaus.janino.JavaC");
-            log(27, "Janino loaded: " + compilerClass.getName());
+            log(27, "Janino loaded via DexClassLoader!");
 
             Object compiler = compilerClass.newInstance();
-
-            // Set classpath
             compilerClass.getMethod("setClassPath", String.class)
                     .invoke(compiler, androidJar.getAbsolutePath());
-
-            // Set destination directory
             compilerClass.getMethod("setDestinationDirectory", String.class, boolean.class)
                     .invoke(compiler, classesDir.getAbsolutePath(), true);
-
-            // Compile
             compilerClass.getMethod("compile", File[].class)
                     .invoke(compiler, new Object[]{new File[]{srcFile}});
 
-            log(35, "Janino compilation done!");
-
+            log(35, "Compilation successful!");
         } catch (Exception e) {
-            log(27, "Janino JavaC failed: " + e.getMessage() + ", trying compiler tool...");
-            // Try alternative Janino API
-            try {
-                Class<?> toolClass = janinoLoader.loadClass("org.codehaus.janino.util.ClassFile");
-                log(28, "Trying Compiler class...");
-                Class<?> compClass = janinoLoader.loadClass("org.codehaus.janino.Compiler");
-                Object comp = compClass.getConstructor(
-                        File[].class, File.class, File.class, File.class, String.class
-                ).newInstance(
-                        new File[]{srcFile},
-                        new File(androidJar.getAbsolutePath()),
-                        null, classesDir, null
-                );
-                compClass.getMethod("compile").invoke(comp);
-            } catch (Exception e2) {
-                throw new Exception("Janino compilation failed: " + e.getMessage() + " / " + e2.getMessage());
-            }
-        } finally {
-            janinoLoader.close();
+            throw new Exception("Janino compile error: " + e.getMessage());
         }
 
         List<File> classes = listFiles(classesDir, ".class");
@@ -162,13 +133,30 @@ public class ApkCompiler {
         File dexFile = new File(buildDir, "classes.dex");
         File dxJar = new File(buildDir, "dx.jar");
         log(48, "Running DX...");
-        java.net.URLClassLoader loader = new java.net.URLClassLoader(
-                new java.net.URL[]{dxJar.toURI().toURL()}, null);
-        Class<?> dxClass = loader.loadClass("com.android.dx.command.Main");
-        String[] args = {"--dex", "--output=" + dexFile.getAbsolutePath(), classesDir.getAbsolutePath()};
-        dxClass.getMethod("main", String[].class).invoke(null, (Object) args);
-        loader.close();
-        if (!dexFile.exists()) throw new Exception("DEX conversion failed");
+
+        // DX also needs to run as DEX on Android
+        // dx.jar is JVM bytecode - we need to run it differently
+        // Use a shell command approach
+        File dxDex = new File(buildDir, "dx.dex");
+        // dx.jar is already extracted, try loading it
+        File dexOptDir = new File(buildDir, "dexopt2");
+        dexOptDir.mkdirs();
+
+        try {
+            dalvik.system.DexClassLoader dxLoader = new dalvik.system.DexClassLoader(
+                    dxJar.getAbsolutePath(),
+                    dexOptDir.getAbsolutePath(),
+                    null,
+                    ClassLoader.getSystemClassLoader()
+            );
+            Class<?> dxClass = dxLoader.loadClass("com.android.dx.command.Main");
+            String[] args = {"--dex", "--output=" + dexFile.getAbsolutePath(), classesDir.getAbsolutePath()};
+            dxClass.getMethod("main", String[].class).invoke(null, (Object) args);
+        } catch (Exception e) {
+            throw new Exception("DX error: " + e.getMessage());
+        }
+
+        if (!dexFile.exists()) throw new Exception("DEX conversion failed - no output file");
         log(60, "DEX done: " + (dexFile.length()/1024) + " KB");
     }
 
