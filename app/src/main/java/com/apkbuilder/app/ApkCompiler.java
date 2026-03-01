@@ -15,7 +15,6 @@ import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
 import java.math.BigInteger;
 import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 import java.util.ArrayList;
 import java.util.Date;
@@ -76,15 +75,17 @@ public class ApkCompiler {
     private void prepareEnvironment() throws Exception {
         extractAsset("android.zip", new File(buildDir, "android.jar"), 8);
         extractAsset("dx.zip", new File(buildDir, "dx.jar"), 12);
-        extractAsset("ecj.zip", new File(buildDir, "ecj.jar"), 14);
-        log(15, "Environment ready. ecj=" + (new File(buildDir,"ecj.jar").length()/1024) + "KB");
+        extractAsset("janino.zip", new File(buildDir, "janino.jar"), 13);
+        extractAsset("commons-compiler.zip", new File(buildDir, "commons-compiler.jar"), 14);
+        log(15, "Environment ready.");
     }
 
     private void compileJava() throws Exception {
         File androidJar = new File(buildDir, "android.jar");
-        File ecjJar = new File(buildDir, "ecj.jar");
+        File janinoJar = new File(buildDir, "janino.jar");
+        File commonsJar = new File(buildDir, "commons-compiler.jar");
 
-        // Prepare source file
+        // Prepare source
         File srcDir = new File(buildDir, "src");
         String[] parts = packageName.split("\\.");
         File pkgDir = srcDir;
@@ -100,62 +101,61 @@ public class ApkCompiler {
         writeFile(srcFile, javaContent);
         log(25, "Compiling: " + srcFile.getName());
 
-        // Run ECJ compiler as a subprocess using the device's Java runtime
-        // ECJ main class: org.eclipse.jdt.internal.compiler.batch.Main
-        String javaExe = System.getProperty("java.home") + "/bin/java";
-        File javaExeFile = new File(javaExe);
+        // Use Janino compiler via reflection - works on Android ART
+        java.net.URLClassLoader janinoLoader = new java.net.URLClassLoader(
+                new java.net.URL[]{
+                        commonsJar.toURI().toURL(),
+                        janinoJar.toURI().toURL()
+                },
+                ClassLoader.getSystemClassLoader()
+        );
 
-        if (javaExeFile.exists()) {
-            // Use subprocess java -jar ecj.jar
-            log(28, "Using java subprocess...");
-            ProcessBuilder pb = new ProcessBuilder(
-                    javaExe,
-                    "-jar", ecjJar.getAbsolutePath(),
-                    "-source", "1.8", "-target", "1.8",
-                    "-classpath", androidJar.getAbsolutePath(),
-                    "-d", classesDir.getAbsolutePath(),
-                    srcFile.getAbsolutePath()
-            );
-            pb.redirectErrorStream(true);
-            pb.directory(buildDir);
-            Process proc = pb.start();
-            StringBuilder output = new StringBuilder();
-            byte[] buf = new byte[4096]; int len;
-            while ((len = proc.getInputStream().read(buf)) > 0)
-                output.append(new String(buf, 0, len));
-            int exitCode = proc.waitFor();
-            log(35, "ECJ exit code: " + exitCode);
-            if (exitCode != 0) {
-                throw new Exception("Compilation failed:\n" + output.toString());
-            }
-        } else {
-            // Fallback: invoke ECJ main() statically
-            log(28, "Using ECJ static main (java.home=" + System.getProperty("java.home") + ")...");
-            java.net.URLClassLoader ecjLoader = new java.net.URLClassLoader(
-                    new java.net.URL[]{ecjJar.toURI().toURL()},
-                    null  // Use null parent to avoid conflicts
-            );
+        try {
+            // Janino's JavaC compiler
+            Class<?> compilerClass = janinoLoader.loadClass("org.codehaus.janino.JavaC");
+            log(27, "Janino loaded: " + compilerClass.getName());
+
+            Object compiler = compilerClass.newInstance();
+
+            // Set classpath
+            compilerClass.getMethod("setClassPath", String.class)
+                    .invoke(compiler, androidJar.getAbsolutePath());
+
+            // Set destination directory
+            compilerClass.getMethod("setDestinationDirectory", String.class, boolean.class)
+                    .invoke(compiler, classesDir.getAbsolutePath(), true);
+
+            // Compile
+            compilerClass.getMethod("compile", File[].class)
+                    .invoke(compiler, new Object[]{new File[]{srcFile}});
+
+            log(35, "Janino compilation done!");
+
+        } catch (Exception e) {
+            log(27, "Janino JavaC failed: " + e.getMessage() + ", trying compiler tool...");
+            // Try alternative Janino API
             try {
-                Class<?> mainClass = ecjLoader.loadClass("org.eclipse.jdt.internal.compiler.batch.Main");
-                java.lang.reflect.Method mainMethod = mainClass.getMethod("main", String[].class);
-                String[] args = {
-                        "-source", "1.8", "-target", "1.8",
-                        "-classpath", androidJar.getAbsolutePath(),
-                        "-d", classesDir.getAbsolutePath(),
-                        srcFile.getAbsolutePath()
-                };
-                mainMethod.invoke(null, (Object) args);
-            } finally {
-                ecjLoader.close();
+                Class<?> toolClass = janinoLoader.loadClass("org.codehaus.janino.util.ClassFile");
+                log(28, "Trying Compiler class...");
+                Class<?> compClass = janinoLoader.loadClass("org.codehaus.janino.Compiler");
+                Object comp = compClass.getConstructor(
+                        File[].class, File.class, File.class, File.class, String.class
+                ).newInstance(
+                        new File[]{srcFile},
+                        new File(androidJar.getAbsolutePath()),
+                        null, classesDir, null
+                );
+                compClass.getMethod("compile").invoke(comp);
+            } catch (Exception e2) {
+                throw new Exception("Janino compilation failed: " + e.getMessage() + " / " + e2.getMessage());
             }
+        } finally {
+            janinoLoader.close();
         }
 
-        // Verify classes were generated
         List<File> classes = listFiles(classesDir, ".class");
-        if (classes.isEmpty()) {
-            throw new Exception("No .class files generated. Compilation may have failed silently.");
-        }
-        log(40, "Compiled " + classes.size() + " class file(s)");
+        if (classes.isEmpty()) throw new Exception("No .class files generated");
+        log(40, "Compiled " + classes.size() + " class(es)");
     }
 
     private void convertToDex() throws Exception {
@@ -239,7 +239,7 @@ public class ApkCompiler {
             byte[] buf = new byte[8192]; int len;
             while ((len = in.read(buf)) > 0) out.write(buf, 0, len);
         }
-        log(logPercent, "Extracted " + dest.getName() + ": " + (dest.length()/1024) + " KB");
+        log(logPercent, "  -> " + dest.getName() + ": " + (dest.length()/1024) + " KB");
     }
 
     private void addToZip(ZipOutputStream zos, File f, String name) throws IOException {
