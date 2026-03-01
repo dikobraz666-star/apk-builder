@@ -156,10 +156,10 @@ public class ApkCompiler {
 
             String name = compilerClass.getName();
             if (name.equals("org.codehaus.janino.Compiler")) {
-                // Compiler(File[] sourceFiles, File destinationDirectory, File[] classPath)
+                // Compiler(File[] sourceFiles, File destDir, File sourceDir, File classPathDir, String encoding)
                 Object compiler = compilerClass.getConstructor(
                     File[].class, File.class, File.class, File.class, String.class
-                ).newInstance(new File[]{srcFile}, classesDir, null, new File(androidJar.getAbsolutePath()), null);
+                ).newInstance(new File[]{srcFile}, classesDir, srcFile.getParentFile(), androidJar, null);
                 compilerClass.getMethod("compile").invoke(compiler);
             } else if (name.equals("org.codehaus.janino.SimpleCompiler")) {
                 Object compiler = compilerClass.newInstance();
