@@ -157,10 +157,15 @@ public class ApkCompiler {
             String name = compilerClass.getName();
             if (name.equals("org.codehaus.janino.Compiler")) {
                 // Compiler(File[] sourceFiles, File destDir, File sourceDir, File classPathDir, String encoding)
-                Object compiler = compilerClass.getConstructor(
-                    File[].class, File.class, File.class, File.class, String.class
-                ).newInstance(new File[]{srcFile}, classesDir, srcFile.getParentFile(), androidJar, null);
-                compilerClass.getMethod("compile").invoke(compiler);
+                try {
+                    Object compiler = compilerClass.getConstructor(
+                        File[].class, File.class, File.class, File.class, String.class
+                    ).newInstance(new File[]{srcFile}, classesDir, srcFile.getParentFile(), androidJar, null);
+                    compilerClass.getMethod("compile").invoke(compiler);
+                } catch (java.lang.reflect.InvocationTargetException ite) {
+                    Throwable cause = ite.getCause();
+                    throw new Exception("Compiler inner error: " + (cause != null ? cause.toString() : ite.toString()));
+                }
             } else if (name.equals("org.codehaus.janino.SimpleCompiler")) {
                 Object compiler = compilerClass.newInstance();
                 compilerClass.getMethod("cook", java.io.Reader.class)
