@@ -187,7 +187,12 @@ public class ApkCompiler {
                         null,                          // warningHandlePatterns
                         false                          // noWarn
                     );
-                    compilerClass.getMethod("compile").invoke(compiler);
+                    try {
+                        compilerClass.getMethod("compile").invoke(compiler);
+                    } catch (java.lang.reflect.InvocationTargetException ite2) {
+                        Throwable c2 = ite2.getCause();
+                        throw new Exception("compile() error: " + (c2 != null ? c2.toString() : ite2.toString()));
+                    }
                 } catch (java.lang.reflect.InvocationTargetException ite) {
                     Throwable cause = ite.getCause();
                     throw new Exception("Compiler inner error: " + (cause != null ? cause.toString() : ite.toString()));
