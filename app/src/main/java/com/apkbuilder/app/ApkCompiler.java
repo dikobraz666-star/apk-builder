@@ -7,6 +7,8 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.cert.X509Certificate;
@@ -72,18 +74,13 @@ public class ApkCompiler {
     private void prepareEnvironment() throws Exception {
         extractAsset("android.zip", new File(buildDir, "android.jar"), 8);
         extractAsset("dx.zip", new File(buildDir, "dx.jar"), 12);
-        // Copy janino.dex to trusted (non-writable) location required by Android 10+
-        File trustedDir = context.getNoBackupFilesDir();
-        trustedDir.mkdirs();
-        extractAsset("janino.zip", new File(trustedDir, "janino.dex"), 14);
-        log(15, "Environment ready. janino=" + (new File(trustedDir,"janino.dex").length()/1024) + "KB");
+        log(15, "Environment ready.");
     }
 
     private void compileJava() throws Exception {
         File androidJar = new File(buildDir, "android.jar");
-        File janinoDex = new File(context.getNoBackupFilesDir(), "janino.dex");
 
-        // Prepare source
+        // Prepare source file in proper package directory
         File srcDir = new File(buildDir, "src");
         String[] parts = packageName.split("\\.");
         File pkgDir = srcDir;
@@ -99,21 +96,19 @@ public class ApkCompiler {
         writeFile(srcFile, javaContent);
         log(25, "Compiling: " + srcFile.getName());
 
-        // Load Janino DEX directly from APK using InMemoryDexClassLoader (Android 8+)
-        // janino.zip is a zip containing classes.dex - extract the inner DEX bytes
+        // Load ECJ DEX from APK assets using InMemoryDexClassLoader
         java.nio.ByteBuffer dexBuffer;
         try (java.util.zip.ZipFile apkZip = new java.util.zip.ZipFile(context.getPackageCodePath())) {
-            java.util.zip.ZipEntry zipEntry = apkZip.getEntry("assets/janino.zip");
-            if (zipEntry == null) throw new Exception("assets/janino.zip not found in APK");
-            // janino.zip is itself a zip containing classes.dex
+            java.util.zip.ZipEntry zipEntry = apkZip.getEntry("assets/ecj.zip");
+            if (zipEntry == null) throw new Exception("assets/ecj.zip not found in APK");
             byte[] zipBytes;
             try (InputStream zipIn = apkZip.getInputStream(zipEntry)) {
                 java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
-                byte[] buf2 = new byte[8192]; int n2;
-                while ((n2 = zipIn.read(buf2)) > 0) baos.write(buf2, 0, n2);
+                byte[] buf = new byte[8192]; int n;
+                while ((n = zipIn.read(buf)) > 0) baos.write(buf, 0, n);
                 zipBytes = baos.toByteArray();
             }
-            // Now read classes.dex from inside janino.zip
+            // ecj.zip is a zip containing classes.dex
             try (java.util.zip.ZipInputStream innerZip = new java.util.zip.ZipInputStream(
                     new java.io.ByteArrayInputStream(zipBytes))) {
                 java.util.zip.ZipEntry inner;
@@ -121,113 +116,105 @@ public class ApkCompiler {
                 while ((inner = innerZip.getNextEntry()) != null) {
                     if (inner.getName().endsWith(".dex")) {
                         java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
-                        byte[] buf2 = new byte[8192]; int n2;
-                        while ((n2 = innerZip.read(buf2)) > 0) baos.write(buf2, 0, n2);
+                        byte[] buf = new byte[8192]; int n;
+                        while ((n = innerZip.read(buf)) > 0) baos.write(buf, 0, n);
                         dexBytes = baos.toByteArray();
                         break;
                     }
                 }
-                if (dexBytes == null) throw new Exception("No .dex found inside janino.zip");
-                log(27, "Extracted inner DEX: " + dexBytes.length + " bytes");
+                if (dexBytes == null) throw new Exception("No .dex found inside ecj.zip");
+                log(27, "Extracted ECJ DEX: " + dexBytes.length + " bytes");
                 dexBuffer = java.nio.ByteBuffer.wrap(dexBytes);
             }
         }
-        log(27, "Loaded janino DEX from APK: " + dexBuffer.capacity() + " bytes");
 
-        dalvik.system.InMemoryDexClassLoader janinoLoader = new dalvik.system.InMemoryDexClassLoader(
+        dalvik.system.InMemoryDexClassLoader ecjLoader = new dalvik.system.InMemoryDexClassLoader(
                 dexBuffer,
                 context.getClassLoader()
         );
 
         try {
-            // Try different Janino compiler class names
-            Class<?> compilerClass = null;
-            String[] classNames = {
-                "org.codehaus.janino.Compiler",
-                "org.codehaus.janino.JavaC",
-                "org.codehaus.commons.compiler.jdk.JavaSourceClassLoader",
-                "org.codehaus.janino.SimpleCompiler"
-            };
-            for (String cn : classNames) {
-                try { compilerClass = janinoLoader.loadClass(cn); log(27, "Found: " + cn); break; }
-                catch (ClassNotFoundException ignored) { log(27, "Not found: " + cn); }
-            }
-            if (compilerClass == null) throw new Exception("No Janino compiler class found in DEX");
+            Class<?> ecjClass = ecjLoader.loadClass("org.eclipse.jdt.internal.compiler.batch.Main");
+            log(28, "Found ECJ: " + ecjClass.getName());
 
-            String name = compilerClass.getName();
-            if (name.equals("org.codehaus.janino.Compiler")) {
-                // Log all available constructors
-                java.lang.reflect.Constructor<?>[] ctors = compilerClass.getConstructors();
-                log(28, "Compiler has " + ctors.length + " constructors:");
-                for (java.lang.reflect.Constructor<?> c : ctors) {
-                    log(28, "  " + c.toString());
+            StringWriter outSw = new StringWriter();
+            StringWriter errSw = new StringWriter();
+            PrintWriter outPw = new PrintWriter(outSw);
+            PrintWriter errPw = new PrintWriter(errSw);
+
+            // Instantiate ECJ Main - try 3-arg constructor, then scan for fallback
+            Object ecj = null;
+            try {
+                java.lang.reflect.Constructor<?> ctor = ecjClass.getConstructor(
+                        PrintWriter.class, PrintWriter.class, boolean.class);
+                ecj = ctor.newInstance(outPw, errPw, false);
+                log(29, "ECJ: 3-arg constructor OK");
+            } catch (NoSuchMethodException e) {
+                // Scan constructors for one starting with (PrintWriter, PrintWriter, boolean, ...)
+                for (java.lang.reflect.Constructor<?> c : ecjClass.getConstructors()) {
+                    Class<?>[] pt = c.getParameterTypes();
+                    if (pt.length >= 3
+                            && pt[0] == PrintWriter.class
+                            && pt[1] == PrintWriter.class
+                            && pt[2] == boolean.class) {
+                        Object[] args = new Object[pt.length];
+                        args[0] = outPw;
+                        args[1] = errPw;
+                        args[2] = false;
+                        // remaining args stay null / false
+                        ecj = c.newInstance(args);
+                        log(29, "ECJ: " + pt.length + "-arg constructor OK");
+                        break;
+                    }
                 }
-                // Use the big constructor:
-                // Compiler(File[] src, File[] classPath, File[] extDirs, File[] bootClassPath,
-                //           File destDir, String encoding, boolean verbose, boolean rebuild,
-                //           boolean debugSource, boolean debugLines, StringPattern[] warnings, boolean noWarn)
-                try {
-                    // Find the constructor with File[] as first param
-                    java.lang.reflect.Constructor<?> bigCtor = null;
-                    for (java.lang.reflect.Constructor<?> c : ctors) {
-                        if (c.getParameterTypes().length > 5) { bigCtor = c; break; }
-                    }
-                    if (bigCtor == null) throw new Exception("Big constructor not found");
-                    Object compiler = bigCtor.newInstance(
-                        new File[]{srcFile},          // sourceFiles
-                        new File[]{androidJar},        // classPath
-                        null,                          // extDirs
-                        null,                          // bootClassPath
-                        classesDir,                    // destinationDirectory
-                        null,                          // encoding
-                        false,                         // verbose
-                        false,                         // rebuild
-                        false,                         // debugSource
-                        true,                          // debugLines
-                        null,                          // warningHandlePatterns
-                        false                          // noWarn
-                    );
-                    // Find compile method
-                    java.lang.reflect.Method compileMethod = null;
-                    for (java.lang.reflect.Method m : compilerClass.getMethods()) {
-                        if (m.getName().equals("compile")) {
-                            log(29, "compile method: " + m.toString());
-                            if (m.getParameterTypes().length == 0) compileMethod = m;
-                        }
-                    }
-                    if (compileMethod == null) {
-                        // try compile(File[])
-                        try { compileMethod = compilerClass.getMethod("compile", File[].class); } catch(Exception ignored){}
-                    }
-                    if (compileMethod == null) throw new Exception("No compile() method found");
-                    try {
-                        // compile(File[]) takes one File[] argument
-                        compileMethod.invoke(compiler, new Object[]{new File[]{srcFile}});
-                    } catch (java.lang.reflect.InvocationTargetException ite2) {
-                        Throwable c2 = ite2.getCause();
-                        throw new Exception("compile() inner error: " + (c2 != null ? c2.toString() : ite2.toString()));
-                    }
-                } catch (java.lang.reflect.InvocationTargetException ite) {
-                    Throwable cause = ite.getCause();
-                    throw new Exception("Compiler inner error: " + (cause != null ? cause.toString() : ite.toString()));
-                }
-            } else if (name.equals("org.codehaus.janino.SimpleCompiler")) {
-                Object compiler = compilerClass.newInstance();
-                compilerClass.getMethod("cook", java.io.Reader.class)
-                    .invoke(compiler, new java.io.FileReader(srcFile));
-            } else {
-                Object compiler = compilerClass.newInstance();
-                try { compilerClass.getMethod("setClassPath", String.class).invoke(compiler, androidJar.getAbsolutePath()); } catch(Exception ignored){}
-                try { compilerClass.getMethod("setDestinationDirectory", String.class, boolean.class).invoke(compiler, classesDir.getAbsolutePath(), true); } catch(Exception ignored){}
-                compilerClass.getMethod("compile", File[].class).invoke(compiler, new Object[]{new File[]{srcFile}});
             }
-            log(35, "Compilation successful!");
-        } catch (Exception e) {
-            throw new Exception("Janino compile error: " + e.getMessage());
+            if (ecj == null) throw new Exception("Could not instantiate ECJ Main");
+
+            // Compile command:
+            // -source 8 -target 8 -bootclasspath <android.jar> -classpath <android.jar>
+            // -d <classesDir> -nowarn <srcFile>
+            String compileArgs =
+                    "-source 8 -target 8 " +
+                    "-bootclasspath " + androidJar.getAbsolutePath() + " " +
+                    "-classpath " + androidJar.getAbsolutePath() + " " +
+                    "-d " + classesDir.getAbsolutePath() + " " +
+                    "-nowarn " +
+                    srcFile.getAbsolutePath();
+
+            log(30, "ECJ cmd: " + compileArgs);
+
+            boolean success;
+            try {
+                // compile(String) — the most common entry point
+                java.lang.reflect.Method m = ecjClass.getMethod("compile", String.class);
+                success = (Boolean) m.invoke(ecj, compileArgs);
+                log(35, "ECJ compile(String) => " + success);
+            } catch (NoSuchMethodException e) {
+                // compile(String[])
+                java.lang.reflect.Method m = ecjClass.getMethod("compile", String[].class);
+                success = (Boolean) m.invoke(ecj, (Object) compileArgs.split(" "));
+                log(35, "ECJ compile(String[]) => " + success);
+            }
+
+            outPw.flush(); errPw.flush();
+            String out = outSw.toString().trim();
+            String err = errSw.toString().trim();
+            if (!out.isEmpty()) log(35, "ECJ stdout: " + out);
+            if (!err.isEmpty()) log(35, "ECJ stderr: " + err);
+
+            if (!success) {
+                throw new Exception("ECJ compilation failed:\n" + (err.isEmpty() ? out : err));
+            }
+
+        } catch (ClassNotFoundException e) {
+            throw new Exception("ECJ class not found in DEX: " + e.getMessage());
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            Throwable cause = e.getCause();
+            throw new Exception("ECJ runtime error: " + (cause != null ? cause.toString() : e.toString()));
         }
 
         List<File> classes = listFiles(classesDir, ".class");
-        if (classes.isEmpty()) throw new Exception("No .class files generated");
+        if (classes.isEmpty()) throw new Exception("No .class files generated after ECJ compile");
         log(40, "Compiled " + classes.size() + " class(es)");
     }
 
@@ -236,11 +223,6 @@ public class ApkCompiler {
         File dxJar = new File(buildDir, "dx.jar");
         log(48, "Running DX...");
 
-        // DX also needs to run as DEX on Android
-        // dx.jar is JVM bytecode - we need to run it differently
-        // Use a shell command approach
-        File dxDex = new File(buildDir, "dx.dex");
-        // dx.jar is already extracted, try loading it
         File dexOptDir = new File(buildDir, "dexopt2");
         dexOptDir.mkdirs();
 
@@ -275,7 +257,8 @@ public class ApkCompiler {
             zos.putNextEntry(new ZipEntry("resources.arsc"));
             zos.write(arsc);
             zos.closeEntry();
-            String str = "<?xml version=\"1.0\" encoding=\"utf-8\"?><resources><string name=\"app_name\">" + appName + "</string></resources>";
+            String str = "<?xml version=\"1.0\" encoding=\"utf-8\"?><resources><string name=\"app_name\">"
+                    + appName + "</string></resources>";
             zos.putNextEntry(new ZipEntry("res/values/strings.xml"));
             zos.write(str.getBytes("UTF-8"));
             zos.closeEntry();
@@ -309,7 +292,8 @@ public class ApkCompiler {
     private X509Certificate generateSelfSignedCert(KeyPair kp, String cn) throws Exception {
         Class<?> x509 = Class.forName("org.bouncycastle.x509.X509V3CertificateGenerator");
         Object gen = x509.newInstance();
-        Object name = Class.forName("org.bouncycastle.asn1.x509.X509Name").getConstructor(String.class).newInstance("CN=" + cn);
+        Object name = Class.forName("org.bouncycastle.asn1.x509.X509Name")
+                .getConstructor(String.class).newInstance("CN=" + cn);
         x509.getMethod("setSerialNumber", BigInteger.class).invoke(gen, BigInteger.valueOf(System.currentTimeMillis()));
         x509.getMethod("setSubjectDN", Class.forName("org.bouncycastle.asn1.x509.X509Name")).invoke(gen, name);
         x509.getMethod("setIssuerDN", Class.forName("org.bouncycastle.asn1.x509.X509Name")).invoke(gen, name);
@@ -351,7 +335,9 @@ public class ApkCompiler {
 
     private void writeFile(File f, String content) throws IOException {
         f.getParentFile().mkdirs();
-        try (FileOutputStream fos = new FileOutputStream(f)) { fos.write(content.getBytes("UTF-8")); }
+        try (FileOutputStream fos = new FileOutputStream(f)) {
+            fos.write(content.getBytes("UTF-8"));
+        }
     }
 
     private List<File> listFiles(File dir, String ext) {
@@ -359,7 +345,10 @@ public class ApkCompiler {
         if (!dir.exists()) return r;
         File[] files = dir.listFiles();
         if (files == null) return r;
-        for (File f : files) { if (f.isDirectory()) r.addAll(listFiles(f, ext)); else if (f.getName().endsWith(ext)) r.add(f); }
+        for (File f : files) {
+            if (f.isDirectory()) r.addAll(listFiles(f, ext));
+            else if (f.getName().endsWith(ext)) r.add(f);
+        }
         return r;
     }
 
