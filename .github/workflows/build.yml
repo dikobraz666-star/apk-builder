@@ -9,14 +9,27 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-      - name: Download compiler jars into assets
+      - name: Download and DEX-ify compiler jars
         run: |
           mkdir -p app/src/main/assets
-          # Janino - Java compiler that works on Android
-          curl -L "https://repo1.maven.org/maven2/org/codehaus/janino/janino/3.1.9/janino-3.1.9.jar" -o app/src/main/assets/janino.zip
-          curl -L "https://repo1.maven.org/maven2/org/codehaus/janino/commons-compiler/3.1.9/commons-compiler-3.1.9.jar" -o app/src/main/assets/commons-compiler.zip
+          
+          # Download Android build tools for dx
+          wget -q https://dl.google.com/android/repository/build-tools_r34-linux.zip -O build-tools.zip
+          unzip -q build-tools.zip -d build-tools-dir
+          DX=$(find build-tools-dir -name "dx" -type f | head -1)
+          chmod +x "$DX"
+          
+          # Download Janino jars
+          curl -L "https://repo1.maven.org/maven2/org/codehaus/janino/janino/3.1.9/janino-3.1.9.jar" -o janino.jar
+          curl -L "https://repo1.maven.org/maven2/org/codehaus/janino/commons-compiler/3.1.9/commons-compiler-3.1.9.jar" -o commons-compiler.jar
+          
+          # Convert Janino to DEX so Android ART can load it
+          "$DX" --dex --output=app/src/main/assets/janino.zip janino.jar commons-compiler.jar
+          
+          # Download other assets
           curl -L "https://repo1.maven.org/maven2/com/google/android/tools/dx/1.7/dx-1.7.jar" -o app/src/main/assets/dx.zip
           curl -L "https://github.com/Reginer/aosp-android-jar/raw/main/android-28/android.jar" -o app/src/main/assets/android.zip
+          
           ls -lh app/src/main/assets/
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
