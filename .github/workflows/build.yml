@@ -17,13 +17,18 @@ jobs:
         run: |
           mkdir -p app/src/main/assets /tmp/ecj_dex
 
-          # Download ECJ (Eclipse Compiler for Java) - handles Android Activity code properly
-          curl -L "https://repo1.maven.org/maven2/org/eclipse/jdt/ecj/3.33.0/ecj-3.33.0.jar" -o ecj.jar
+          # ECJ 3.26.0 - compiled targeting Java 8 (class file version 52.0)
+          # dx tool from build-tools 30.0.3 only supports up to Java 8 (version 52.0)
+          # Newer ECJ versions (3.27+) use Java 11 (version 55.0) which dx rejects
+          curl -L "https://repo1.maven.org/maven2/org/eclipse/jdt/ecj/3.26.0/ecj-3.26.0.jar" -o ecj.jar
 
-          # Convert ECJ to DEX using dx tool
+          # Verify class file version (should show 52.0 = Java 8)
+          javap -verbose -cp ecj.jar org.eclipse.jdt.internal.compiler.batch.Main 2>/dev/null | grep "major version" || true
+
+          # Convert ECJ to DEX
           $ANDROID_SDK_ROOT/build-tools/30.0.3/dx --dex --output=/tmp/ecj_dex/classes.dex ecj.jar
 
-          # Package DEX into a zip (Android won't compress .zip assets)
+          # Package DEX into zip (Android won't compress .zip assets)
           zip app/src/main/assets/ecj.zip -j /tmp/ecj_dex/classes.dex
 
           # dx tool for DEX conversion of compiled .class files
