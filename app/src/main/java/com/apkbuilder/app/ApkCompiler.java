@@ -100,21 +100,37 @@ public class ApkCompiler {
         log(25, "Compiling: " + srcFile.getName());
 
         // Load Janino DEX directly from APK using InMemoryDexClassLoader (Android 8+)
-        // This bypasses the "writable location" restriction
+        // janino.zip is a zip containing classes.dex - extract the inner DEX bytes
         java.nio.ByteBuffer dexBuffer;
         try (java.util.zip.ZipFile apkZip = new java.util.zip.ZipFile(context.getPackageCodePath())) {
-            java.util.zip.ZipEntry dexEntry = apkZip.getEntry("assets/janino.zip");
-            if (dexEntry == null) throw new Exception("janino.zip not found in APK");
-            byte[] dexBytes = new byte[(int) dexEntry.getSize()];
-            try (InputStream dexIn = apkZip.getInputStream(dexEntry)) {
-                int read = 0;
-                while (read < dexBytes.length) {
-                    int n = dexIn.read(dexBytes, read, dexBytes.length - read);
-                    if (n < 0) break;
-                    read += n;
-                }
+            java.util.zip.ZipEntry zipEntry = apkZip.getEntry("assets/janino.zip");
+            if (zipEntry == null) throw new Exception("assets/janino.zip not found in APK");
+            // janino.zip is itself a zip containing classes.dex
+            byte[] zipBytes;
+            try (InputStream zipIn = apkZip.getInputStream(zipEntry)) {
+                java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+                byte[] buf2 = new byte[8192]; int n2;
+                while ((n2 = zipIn.read(buf2)) > 0) baos.write(buf2, 0, n2);
+                zipBytes = baos.toByteArray();
             }
-            dexBuffer = java.nio.ByteBuffer.wrap(dexBytes);
+            // Now read classes.dex from inside janino.zip
+            try (java.util.zip.ZipInputStream innerZip = new java.util.zip.ZipInputStream(
+                    new java.io.ByteArrayInputStream(zipBytes))) {
+                java.util.zip.ZipEntry inner;
+                byte[] dexBytes = null;
+                while ((inner = innerZip.getNextEntry()) != null) {
+                    if (inner.getName().endsWith(".dex")) {
+                        java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+                        byte[] buf2 = new byte[8192]; int n2;
+                        while ((n2 = innerZip.read(buf2)) > 0) baos.write(buf2, 0, n2);
+                        dexBytes = baos.toByteArray();
+                        break;
+                    }
+                }
+                if (dexBytes == null) throw new Exception("No .dex found inside janino.zip");
+                log(27, "Extracted inner DEX: " + dexBytes.length + " bytes");
+                dexBuffer = java.nio.ByteBuffer.wrap(dexBytes);
+            }
         }
         log(27, "Loaded janino DEX from APK: " + dexBuffer.capacity() + " bytes");
 
