@@ -9,10 +9,12 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-      - name: Download ECJ and DX jars into assets
+      - name: Download compiler jars into assets
         run: |
           mkdir -p app/src/main/assets
-          curl -L "https://repo1.maven.org/maven2/org/eclipse/jdt/core/compiler/ecj/4.6.1/ecj-4.6.1.jar" -o app/src/main/assets/ecj.zip
+          # Janino - Java compiler that works on Android
+          curl -L "https://repo1.maven.org/maven2/org/codehaus/janino/janino/3.1.9/janino-3.1.9.jar" -o app/src/main/assets/janino.zip
+          curl -L "https://repo1.maven.org/maven2/org/codehaus/janino/commons-compiler/3.1.9/commons-compiler-3.1.9.jar" -o app/src/main/assets/commons-compiler.zip
           curl -L "https://repo1.maven.org/maven2/com/google/android/tools/dx/1.7/dx-1.7.jar" -o app/src/main/assets/dx.zip
           curl -L "https://github.com/Reginer/aosp-android-jar/raw/main/android-28/android.jar" -o app/src/main/assets/android.zip
           ls -lh app/src/main/assets/
