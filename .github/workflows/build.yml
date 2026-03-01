@@ -11,22 +11,18 @@ jobs:
           distribution: 'temurin'
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+      - name: Install build tools with dx
+        run: sdkmanager "build-tools;30.0.3"
       - name: Download and DEX-ify compiler jars
         run: |
-          mkdir -p app/src/main/assets
+          mkdir -p app/src/main/assets /tmp/janino_dex
           
-          # Download Janino jars
           curl -L "https://repo1.maven.org/maven2/org/codehaus/janino/janino/3.1.9/janino-3.1.9.jar" -o janino.jar
           curl -L "https://repo1.maven.org/maven2/org/codehaus/janino/commons-compiler/3.1.9/commons-compiler-3.1.9.jar" -o commons-compiler.jar
           
-          # Find dx tool from Android SDK
-          DX=$(find $ANDROID_SDK_ROOT/build-tools -name "dx" | sort -r | head -1)
-          echo "Using dx: $DX"
+          $ANDROID_SDK_ROOT/build-tools/30.0.3/dx --dex --output=/tmp/janino_dex/classes.dex janino.jar commons-compiler.jar
+          zip app/src/main/assets/janino.zip -j /tmp/janino_dex/classes.dex
           
-          # Convert Janino to DEX
-          "$DX" --dex --output=app/src/main/assets/janino.zip janino.jar commons-compiler.jar
-          
-          # Download other assets
           curl -L "https://repo1.maven.org/maven2/com/google/android/tools/dx/1.7/dx-1.7.jar" -o app/src/main/assets/dx.zip
           curl -L "https://github.com/Reginer/aosp-android-jar/raw/main/android-28/android.jar" -o app/src/main/assets/android.zip
           
