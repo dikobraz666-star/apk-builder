@@ -162,10 +162,30 @@ public class ApkCompiler {
                 for (java.lang.reflect.Constructor<?> c : ctors) {
                     log(28, "  " + c.toString());
                 }
-                // Try the first constructor that matches
+                // Use the big constructor:
+                // Compiler(File[] src, File[] classPath, File[] extDirs, File[] bootClassPath,
+                //           File destDir, String encoding, boolean verbose, boolean rebuild,
+                //           boolean debugSource, boolean debugLines, StringPattern[] warnings, boolean noWarn)
                 try {
-                    Object compiler = ctors[0].newInstance(
-                        new File[]{srcFile}, classesDir, srcFile.getParentFile(), androidJar, null
+                    // Find the constructor with File[] as first param
+                    java.lang.reflect.Constructor<?> bigCtor = null;
+                    for (java.lang.reflect.Constructor<?> c : ctors) {
+                        if (c.getParameterTypes().length > 5) { bigCtor = c; break; }
+                    }
+                    if (bigCtor == null) throw new Exception("Big constructor not found");
+                    Object compiler = bigCtor.newInstance(
+                        new File[]{srcFile},          // sourceFiles
+                        new File[]{androidJar},        // classPath
+                        null,                          // extDirs
+                        null,                          // bootClassPath
+                        classesDir,                    // destinationDirectory
+                        null,                          // encoding
+                        false,                         // verbose
+                        false,                         // rebuild
+                        false,                         // debugSource
+                        true,                          // debugLines
+                        null,                          // warningHandlePatterns
+                        false                          // noWarn
                     );
                     compilerClass.getMethod("compile").invoke(compiler);
                 } catch (java.lang.reflect.InvocationTargetException ite) {
