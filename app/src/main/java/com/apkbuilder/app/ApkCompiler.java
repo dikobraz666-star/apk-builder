@@ -156,11 +156,17 @@ public class ApkCompiler {
 
             String name = compilerClass.getName();
             if (name.equals("org.codehaus.janino.Compiler")) {
-                // Compiler(File[] sourceFiles, File destDir, File sourceDir, File classPathDir, String encoding)
+                // Log all available constructors
+                java.lang.reflect.Constructor<?>[] ctors = compilerClass.getConstructors();
+                log(28, "Compiler has " + ctors.length + " constructors:");
+                for (java.lang.reflect.Constructor<?> c : ctors) {
+                    log(28, "  " + c.toString());
+                }
+                // Try the first constructor that matches
                 try {
-                    Object compiler = compilerClass.getConstructor(
-                        File[].class, File.class, File.class, File.class, String.class
-                    ).newInstance(new File[]{srcFile}, classesDir, srcFile.getParentFile(), androidJar, null);
+                    Object compiler = ctors[0].newInstance(
+                        new File[]{srcFile}, classesDir, srcFile.getParentFile(), androidJar, null
+                    );
                     compilerClass.getMethod("compile").invoke(compiler);
                 } catch (java.lang.reflect.InvocationTargetException ite) {
                     Throwable cause = ite.getCause();
