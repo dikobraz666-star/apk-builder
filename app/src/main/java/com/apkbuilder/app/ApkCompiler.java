@@ -129,49 +129,24 @@ public class ApkCompiler {
             StringWriter err = new StringWriter();
             PrintWriter pw1 = new PrintWriter(out);
             PrintWriter pw2 = new PrintWriter(err);
-            boolean success = false;
-            Exception lastEx = null;
 
-            for (String cls : compilerClasses) {
-                try {
-                    Class<?> c = ecjLoader.loadClass(cls);
-                    try {
-                        String args = "-source 1.8 -target 1.8 -classpath \""
-                                + androidJar.getAbsolutePath() + "\" -d \""
-                                + classesDir.getAbsolutePath() + "\" \""
-                                + srcFile.getAbsolutePath() + "\"";
-                        success = (boolean) c.getMethod("compile",
-                                String.class, PrintWriter.class, PrintWriter.class, Object.class)
-                                .invoke(null, args, pw1, pw2, null);
-                        if (success) { log(35, "Compiled via " + cls); break; }
-                    } catch (Exception e1) {
-                        for (java.lang.reflect.Constructor<?> ctor : c.getConstructors()) {
-                            int n = ctor.getParameterTypes().length;
-                            try {
-                                Object inst = null;
-                                if (n == 3) inst = ctor.newInstance(pw1, pw2, false);
-                                else if (n == 4) inst = ctor.newInstance(pw1, pw2, false, null);
-                                else if (n == 5) inst = ctor.newInstance(pw1, pw2, false, null, null);
-                                if (inst != null) {
-                                    String[] argsArr = {"-source", "1.8", "-target", "1.8",
-                                            "-classpath", androidJar.getAbsolutePath(),
-                                            "-d", classesDir.getAbsolutePath(),
-                                            srcFile.getAbsolutePath()};
-                                    success = (boolean) c.getMethod("compile", String[].class)
-                                            .invoke(inst, (Object) argsArr);
-                                    if (success) { log(35, "Compiled via " + cls); break; }
-                                }
-                            } catch (Exception ignored) {}
-                        }
-                        if (success) break;
-                    }
-                } catch (Exception e) { lastEx = e; }
-            }
+            // Use Main directly - we know it exists in ecj 4.6.1
+            Class<?> mainClass = ecjLoader.loadClass("org.eclipse.jdt.internal.compiler.batch.Main");
+            Object ecjMain = mainClass.getConstructor(
+                    PrintWriter.class, PrintWriter.class, boolean.class
+            ).newInstance(pw1, pw2, false);
+
+            String[] argsArr = {"-source", "1.8", "-target", "1.8",
+                    "-classpath", androidJar.getAbsolutePath(),
+                    "-d", classesDir.getAbsolutePath(),
+                    srcFile.getAbsolutePath()};
+
+            boolean success = (boolean) mainClass.getMethod("compile", String[].class)
+                    .invoke(ecjMain, (Object) argsArr);
 
             if (!success) {
                 String errors = err.toString();
                 if (errors.isEmpty()) errors = out.toString();
-                if (errors.isEmpty() && lastEx != null) errors = lastEx.getMessage();
                 throw new Exception("Compilation failed:\n" + errors);
             }
         } finally {
