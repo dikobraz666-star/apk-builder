@@ -72,13 +72,16 @@ public class ApkCompiler {
     private void prepareEnvironment() throws Exception {
         extractAsset("android.zip", new File(buildDir, "android.jar"), 8);
         extractAsset("dx.zip", new File(buildDir, "dx.jar"), 12);
-        extractAsset("janino.zip", new File(buildDir, "janino.dex"), 14);
-        log(15, "Environment ready. janino=" + (new File(buildDir,"janino.dex").length()/1024) + "KB");
+        // Copy janino.dex to trusted (non-writable) location required by Android 10+
+        File trustedDir = context.getNoBackupFilesDir();
+        trustedDir.mkdirs();
+        extractAsset("janino.zip", new File(trustedDir, "janino.dex"), 14);
+        log(15, "Environment ready. janino=" + (new File(trustedDir,"janino.dex").length()/1024) + "KB");
     }
 
     private void compileJava() throws Exception {
         File androidJar = new File(buildDir, "android.jar");
-        File janinoDex = new File(buildDir, "janino.dex");
+        File janinoDex = new File(context.getNoBackupFilesDir(), "janino.dex");
 
         // Prepare source
         File srcDir = new File(buildDir, "src");
